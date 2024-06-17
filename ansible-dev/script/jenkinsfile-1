@@ -1,0 +1,79 @@
+pipeline {
+    agent {label 'linux'}
+    
+    
+    environment {
+        
+        
+        ARTIFACTORY_URL = 'http://54.236.188.125:8081'
+        ARTIFACTORY_CREDENTIALS = 'jfrog-id' // Jenkins credentials ID for JFrog
+        ANSIBLE_SERVER = 'ec2-54-163-47-237.compute-1.amazonaws.com'
+        SSH_CREDENTIALS = 'Ansible' // Jenkins credentials ID for SSH to the Ansible server
+        ANSIBLE_PATH = '/home/ec2-user/ansible-dev'
+        SONARQUBE_URL = 'https://sonarcloud.io/'
+        SONARQUBE_ORG = 'guilene2022'
+        SCANNER_HOME = '/opt/sonar-scanner/bin' // Correct path to sonar-scanner
+        SONARQUBE_PROJECT_KEY = 'Guilene2022_ansible-sample'
+        SONARQUBE_TOKEN = credentials('sonarcloud-token')     // Store your SonarCloud token in Jenkins credentials
+
+    }
+    
+    stages {
+        stage('SonarQube Analysis') {
+            steps {
+                withSonarQubeEnv('sonarQube') {
+                    script {
+                        def scannerHome = tool 'sonarQube'
+                        sh """
+                            ${scannerHome}/opt/sonar-scanner \
+                            -Dsonar.organization=${SONARQUBE_ORG} \
+                            -Dsonar.projectKey=${SONARQUBE_PROJECT_KEY} \
+                            -Dsonar.sources=. \
+                            -Dsonar.host.url=${SONARQUBE_URL} \
+                            -Dsonar.login=${SONARQUBE_TOKEN}
+                        """
+                    }
+                }
+            }
+        }
+    
+ 
+        stage('Zip Ansible Playbook') {
+            steps {
+                script {
+                    def zipFileName = "ansible-playbook-${env.BUILD_ID}.zip"
+                    sh "zip -r ${zipFileName} ."
+                    
+                }
+            }
+        }
+        stage('Upload to Artifactory') {
+            steps {
+                script {
+                    def zipFileName = "ansible-playbook-${env.BUILD_ID}.zip"
+                    sh """
+                   curl -uadmin:AP5RB9x5AQha5vBcX7VG1sxdMDb -T ${zipFileName} "http://54.236.188.125:8081/artifactory/ansible-repo/${zipFileName}"
+                    """
+                }
+            }
+        }
+        stage('Deploy to Ansible Server') {
+            steps {
+                script {
+                    def zipFileName = "ansible-playbook-${env.BUILD_ID}.zip"
+                    sshagent (credentials: ['Ansible']) {
+                        sh """
+                        scp -o StrictHostKeyChecking=no ${zipFileName} ec2-user@${ANSIBLE_SERVER}:${ANSIBLE_PATH}/
+                        ssh -o StrictHostKeyChecking=no ec2-user@${ANSIBLE_SERVER} 'cd ${ANSIBLE_PATH} && unzip -o ${zipFileName}'
+                        """
+                    }
+                }
+            }
+        }
+    }
+    post {
+        always {
+            cleanWs()
+        }
+    }
+}
